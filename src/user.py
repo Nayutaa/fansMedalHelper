@@ -109,7 +109,7 @@ class BiliUser:
             if not self.config['ASYNC']:
                 self.log.log("INFO", "同步点赞任务开始....")
                 for index, medal in enumerate(failedMedals):
-                    for i in range(30):
+                    for i in range(1000):
                         tasks = []
                         tasks.append(
                             self.api.likeInteractV3(medal['room_info']['room_id'], medal['medal']['target_id'],self.mid)
@@ -145,36 +145,55 @@ class BiliUser:
 
     async def sendDanmaku(self):
         """
-        每日弹幕打卡
+        在指定的时间内，每隔 DANMAKU_CD 秒向所有勋章房间发送弹幕
         """
         if not self.config['DANMAKU_CD']:
             self.log.log("INFO", "弹幕任务关闭")
             return
-        self.log.log("INFO", "弹幕打卡任务开始....(预计 {} 秒完成)".format(len(self.medals) * self.config['DANMAKU_CD']))
-        n = 0
-        successnum = 0
-        for medal in self.medals:
-            n += 1
-            (await self.api.wearMedal(medal['medal']['medal_id'])) if self.config['WEARMEDAL'] else ...
-            try:
-                danmaku = await self.api.sendDanmaku(medal['room_info']['room_id'])
-                successnum+=1
-                self.log.log(
-                    "DEBUG",
-                    "{} 房间弹幕打卡成功: {} ({}/{})".format(
-                        medal['anchor_info']['nick_name'], danmaku, n, len(self.medals)
-                    ),
-                )
-            except Exception as e:
-                self.log.log("ERROR", "{} 房间弹幕打卡失败: {}".format(medal['anchor_info']['nick_name'], e))
-                self.errmsg.append(f"【{self.name}】 {medal['anchor_info']['nick_name']} 房间弹幕打卡失败: {str(e)}")
-            finally:
-                await asyncio.sleep(self.config['DANMAKU_CD'])
 
-        if hasattr(self, 'initialMedal'):
-            (await self.api.wearMedal(self.initialMedal['medal_id'])) if self.config['WEARMEDAL'] else ...
-        self.log.log("SUCCESS", "弹幕打卡任务完成")
-        self.message.append(f"【{self.name}】 弹幕打卡任务完成 {successnum}/{len(self.medals)}")
+        total_duration = timedelta(minutes=self.config['WATCHINGLIVE'])  # 总持续时间
+        start_time = datetime.now()
+        elapsed_time = timedelta()
+        iteration = 0
+
+        self.log.log("INFO", f"弹幕打卡任务开始...（持续 {self.config['WATCHINGLIVE']} 分钟，每隔 {self.config['DANMAKU_CD']} 秒发送一次）")
+
+        while elapsed_time < total_duration:
+            iteration += 1
+            successnum = 0
+
+            for medal in self.medals:
+                if self.config['WEARMEDAL']:
+                    await self.api.wearMedal(medal['medal']['medal_id'])
+                try:
+                    danmaku = await self.api.sendDanmaku(medal['room_info']['room_id'])
+                    successnum += 1
+                    self.log.log(
+                        "DEBUG",
+                        f"{medal['anchor_info']['nick_name']} 房间弹幕发送成功: {danmaku} (第 {iteration} 次)"
+                    )
+                except Exception as e:
+                    self.log.log("ERROR", f"{medal['anchor_info']['nick_name']} 房间弹幕发送失败: {e}")
+                    self.errmsg.append(f"【{self.name}】 {medal['anchor_info']['nick_name']} 房间弹幕发送失败: {str(e)}")
+
+            if hasattr(self, 'initialMedal') and self.config['WEARMEDAL']:
+                await self.api.wearMedal(self.initialMedal['medal_id'])
+
+            self.log.log("SUCCESS", f"第 {iteration} 次弹幕发送任务完成，成功发送 {successnum}/{len(self.medals)} 个弹幕")
+            self.message.append(f"【{self.name}】 第 {iteration} 次弹幕发送任务完成，成功发送 {successnum}/{len(self.medals)}")
+
+            # 计算已经消耗的时间
+            elapsed_time = datetime.now() - start_time
+            remaining_time = total_duration - elapsed_time
+
+            if remaining_time <= timedelta(0):
+                break
+
+            # 计算下一次等待的时间
+            sleep_time = min(self.config['DANMAKU_CD'], remaining_time.total_seconds())
+            await asyncio.sleep(sleep_time)
+
+        self.log.log("INFO", "弹幕打卡任务已完成指定的持续时间")
 
     async def init(self):
         if not await self.loginVerify():
